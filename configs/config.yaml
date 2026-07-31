@@ -1,0 +1,74 @@
+# M-LATTE configuration
+# Mirrors hyperparameters reported in the paper (Section IV-B), with
+# GPU-memory-aware defaults for a 16GB card (RTX 2000 Ada).
+
+seed: 42
+
+paths:
+  daisee_root: "./data/DAiSEE"          # expects Train/Validation/Test + Labels/*.csv
+  daisee_frames_cache: "./data/DAiSEE_frames"
+  mosi_root: "./data/CMU-MOSI"
+  checkpoints: "./checkpoints"
+  logs: "./logs"
+
+# --- Visual backbone pretraining (Table III in the paper) ---
+visual_pretrain:
+  epochs: 100
+  lr: 1.0e-5
+  lr_decay_factor: 10
+  lr_decay_every: 25
+  batch_size: 64
+  emotion_dataset: "RAF-DB"     # or "FER2013" as an accessible substitute
+  behavior_dataset: "StudentEngagementDataset"  # or your own annotated substitute
+  num_emotion_classes: 7
+  num_behavior_classes: 3
+
+# --- TrendCycleVAE ---
+trend_cycle_vae:
+  transformer_layers: 4         # optimal per Table IV
+  d_model: 256
+  n_heads: 8
+  conv_channels: [128, 256, 256]
+  latent_dim: 128
+  fft_trend_cutoff_ratio: 0.1   # fraction of low frequencies kept as "trend"
+  fft_num_peaks: 3              # number of dominant seasonal peaks kept for "cycle"
+
+# --- ViCEF fusion ---
+vicef:
+  d_model: 256
+  n_heads: 8
+
+# --- Windowing (Table XII: 32s optimal) ---
+window:
+  window_seconds: 32
+  fps: 1                        # paper samples "one frame per second"
+  stride_seconds: 16            # 50% overlap; adjust as needed
+
+# --- Training (Section IV-B-5) ---
+train:
+  optimizer: adam
+  lr: 1.0e-4
+  batch_size: 32                # reduce to 8-16 with grad_accum on 16GB GPUs
+  grad_accum_steps: 2
+  max_epochs: 200
+  early_stopping_patience: 15
+  num_workers: 4
+  mixed_precision: true
+  kl_weight: 1.0
+  smoothness_weight: 0.05       # smoothness constraint mentioned in the abstract
+
+# --- DAiSEE-specific (visual-only path, Section IV-C-2) ---
+daisee:
+  label_values: [0.0, 0.25, 0.5, 1.0]   # very-low..very-high mapped to continuous
+  clip_seconds: 10
+  batch_size: 16                # conservative start for 16GB GPUs; see note below
+  lr: 1.0e-4
+  max_epochs: 60
+  early_stopping_patience: 10
+  # NOTE on memory: each sample is a 10-frame clip run through TWO ResNet-50
+  # branches. With the behavior branch now unfrozen (no domain checkpoint
+  # yet), that's real backward-pass memory for 10 x batch_size images.
+  # batch_size=16 here + train.grad_accum_steps=2 (below) reaches the same
+  # effective batch of 32 as the paper, at roughly half the peak memory.
+  # If `nvidia-smi` shows you're well under 16GB during training, try
+  # batch_size: 32 + grad_accum_steps: 1 for faster epochs.
