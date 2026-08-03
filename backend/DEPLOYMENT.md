@@ -16,12 +16,19 @@ PyTorch backend, switch to the ONNX-backed service instead:
 
 1. Upload `checkpoints/daisee_mlatte.onnx` to the **same Hugging Face model
    repo** you used for the `.pt` checkpoint (Files and versions → Add file →
-   Upload files), and copy its direct download link the same way.
+   Upload files). Note the repo ID (e.g. `yomna26ashraf/engagevision-mlatte`).
 2. On Render → your service → **Environment**, add/update:
    - `MLATTE_USE_ONNX` = `1`
-   - `MLATTE_ONNX_URL` = the direct download link from step 1
+   - `MLATTE_HF_REPO_ID` = `yomna26ashraf/engagevision-mlatte` (your repo ID)
+   - `MLATTE_HF_FILENAME` = `daisee_mlatte.onnx` (only needed if you named it
+     something else)
    - `MLATTE_LOW_MEMORY` = `1` (still helps — int8-quantizes the ONNX graph too)
-   - You can remove `MLATTE_CHECKPOINT_URL` now; the ONNX path doesn't need it.
+   - You can remove `MLATTE_CHECKPOINT_URL` / `MLATTE_ONNX_URL` now — the
+     `huggingface_hub`-based download (via `MLATTE_HF_REPO_ID`) is more
+     reliable than a raw URL, since it correctly handles Hugging Face's
+     Xet/LFS storage (a plain URL download can silently fetch an HTML/
+     redirect page instead of the real binary on Xet-backed repos, which
+     then fails with "Protobuf parsing failed" at load time).
 3. Trigger a redeploy (push a commit, or Manual Deploy).
 
 This avoids loading full PyTorch + torchvision + the dual-ResNet-50 model into

@@ -45,17 +45,37 @@ DEFAULT_CLIP_LEN = int(os.environ.get("MLATTE_CLIP_LEN", "10"))  # must match th
 
 
 def _maybe_download_onnx(onnx_path: str):
-    """Same pattern as model_service.py's checkpoint auto-download: if the
-    .onnx file isn't present locally but MLATTE_ONNX_URL is set (e.g. a
-    direct download link from the same Hugging Face model repo you
-    uploaded the .pt checkpoint to), fetch it once at startup."""
+    """Downloads the .onnx model if it's not present locally.
+
+    Prefers `huggingface_hub`'s `hf_hub_download` (set MLATTE_HF_REPO_ID +
+    optionally MLATTE_HF_FILENAME) — this correctly handles Hugging Face's
+    Xet/LFS storage backends, which a plain HTTP GET via urllib can fail
+    on (you may get an HTML/redirect page instead of the real binary,
+    which then fails with "Protobuf parsing failed" at load time).
+
+    Falls back to a plain URL download (MLATTE_ONNX_URL) for any other
+    direct-download host that isn't Hugging Face.
+    """
     if os.path.exists(onnx_path):
         return
+
+    os.makedirs(os.path.dirname(onnx_path), exist_ok=True)
+    hf_repo = os.environ.get("MLATTE_HF_REPO_ID")
+
+    if hf_repo:
+        hf_filename = os.environ.get("MLATTE_HF_FILENAME", "daisee_mlatte.onnx")
+        from huggingface_hub import hf_hub_download
+        import shutil
+        print(f"Downloading {hf_filename} from Hugging Face repo {hf_repo} ...")
+        downloaded_path = hf_hub_download(repo_id=hf_repo, filename=hf_filename)
+        shutil.copy(downloaded_path, onnx_path)
+        print("ONNX model download complete (via huggingface_hub).")
+        return
+
     url = os.environ.get("MLATTE_ONNX_URL")
     if not url:
         return
     import urllib.request
-    os.makedirs(os.path.dirname(onnx_path), exist_ok=True)
     print(f"Downloading ONNX model from {url} -> {onnx_path} ...")
     urllib.request.urlretrieve(url, onnx_path)
     print("ONNX model download complete.")
