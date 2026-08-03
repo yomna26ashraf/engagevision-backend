@@ -15,7 +15,7 @@ import yaml
 from torch.amp import GradScaler, autocast
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from src.data.daisee_dataset import build_daisee_dataloaders  # noqa: E402
+from src.data.daisee_dataset import build_daisee_dataloaders, DAISEE_RAW_TO_MERGED_CLASS, MERGED_CLASS_LABELS  # noqa: E402
 from src.losses import total_loss  # noqa: E402
 from src.models.visual_backbone import DualBranchVisualEncoder, EmotionBranch, BehaviorBranch  # noqa: E402
 from src.models.pipelines import DAiSEEPipeline  # noqa: E402
@@ -58,19 +58,15 @@ def build_visual_encoder(emotion_ckpt, behavior_ckpt, device, freeze_override: b
     return encoder.to(device)
 
 
-def compute_class_weights(dataset, num_classes: int = 4, device=None, max_weight: float = 8.0) -> torch.Tensor:
-    """Inverse-frequency weight per DAiSEE raw label (0..3), computed from
-    the training split's actual label distribution. Counteracts DAiSEE's
-    severe imbalance (very few "Not Engaged" clips) which otherwise lets
-    an unweighted MSE loss collapse toward always predicting the majority
-    region. Weights are normalized to a mean of 1 so the overall loss
-    scale stays comparable to the unweighted case, then capped at
-    `max_weight` — with a handful of "Not Engaged" samples, raw inverse
-    frequency can be 50-100x, which destabilizes training far more than
-    it helps (a few examples dominating every batch's gradient)."""
+def compute_class_weights(dataset, num_classes: int = 3, device=None, max_weight: float = 8.0) -> torch.Tensor:
+    """Inverse-frequency weight per merged DAiSEE class (0=Low Engagement,
+    1=Engaged, 2=Highly Engaged — see src/data/daisee_dataset.py for the
+    very-low/low merge). NOTE: unused by default now that oversampling
+    (build_class_balanced_sampler) handles imbalance instead — kept here
+    for reference / in case you want to experiment with combining both."""
     counts = torch.zeros(num_classes)
     for row in dataset.rows:
-        counts[int(row["Engagement"])] += 1
+        counts[DAISEE_RAW_TO_MERGED_CLASS[int(row["Engagement"])]] += 1
     counts = counts.clamp(min=1)  # avoid div-by-zero for any unseen class
     weights = counts.sum() / (num_classes * counts)
     weights = weights / weights.mean()
@@ -180,14 +176,21 @@ def main():
         batch_size=cfg["daisee"]["batch_size"],
         clip_len=cfg["daisee"]["clip_seconds"],
         num_workers=cfg["train"]["num_workers"],
+        balance_classes=True,
     )
 
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.Adam(trainable_params, lr=cfg["daisee"]["lr"])
     scaler = GradScaler(device.type, enabled=cfg["train"]["mixed_precision"] and device.type == "cuda")
 
-    class_weights = compute_class_weights(train_loader.dataset, num_classes=len(cfg["daisee"]["label_values"]),
-                                           device=device)
+    # NOTE: class imbalance is now handled by oversampling the rare classes
+    # at the DataLoader level (see build_daisee_dataloaders(balance_classes=True)
+    # in src/data/daisee_dataset.py), which gave real additional training
+    # exposure to "Not Engaged" clips. We tried loss-reweighting alone
+    # first and it barely moved the confusion matrix while hurting overall
+    # accuracy, so it's disabled here (class_weights=None) to avoid
+    # stacking two imbalance-correction mechanisms at once.
+    class_weights = None
 
     early_stopper = EarlyStopping(patience=cfg["daisee"]["early_stopping_patience"])
     ckpt_path = os.path.join(cfg["paths"]["checkpoints"], "daisee_mlatte_best.pt")
@@ -240,7 +243,7 @@ def main():
     _save_results_json(cfg, epoch_history, test_stats, test_classes, test_label_classes, test_acc)
 
 
-LEVEL_LABELS = ["Not Engaged", "Barely Engaged", "Engaged", "Highly Engaged"]
+LEVEL_LABELS = MERGED_CLASS_LABELS  # ["Low Engagement", "Engaged", "Highly Engaged"]
 
 
 def _save_results_json(cfg, epoch_history, test_stats, test_classes, test_label_classes, test_acc):

@@ -12,6 +12,7 @@ mistakes placeholder scores for real ones.
 """
 from __future__ import annotations
 
+import gc
 import os
 import sys
 from typing import List
@@ -20,6 +21,11 @@ import cv2
 import numpy as np
 import torch
 import yaml
+
+# Keep PyTorch's CPU thread pool small — each thread carries its own
+# working-memory overhead, which adds up on a memory-capped host (e.g. a
+# 512MB deployment tier). Must be set before any tensor ops run.
+torch.set_num_threads(int(os.environ.get("MLATTE_NUM_THREADS", "1")))
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -34,6 +40,13 @@ except ImportError:
 
 DEFAULT_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "configs", "config.yaml")
 DEFAULT_CHECKPOINT = os.path.join(os.path.dirname(__file__), "..", "checkpoints", "daisee_mlatte_best.pt")
+
+# Set MLATTE_LOW_MEMORY=1 (e.g. as a Render/Railway env var) to trade some
+# speed and a little precision for a much smaller memory footprint:
+#   - frames go through each CNN branch 2-at-a-time instead of all at once
+#   - the VAE/regression Linear layers are dynamically int8-quantized
+# Leave unset for normal (GPU/local) use — this is a deployment-only knob.
+LOW_MEMORY_MODE = os.environ.get("MLATTE_LOW_MEMORY", "0") == "1"
 
 
 def _maybe_download_checkpoint(checkpoint_path: str):
@@ -76,6 +89,7 @@ class MLatteService:
             EmotionBranch(num_classes=7, pretrained_imagenet=(state is None)),
             BehaviorBranch(num_classes=3, pretrained_imagenet=(state is None)),
             freeze_backbones=True,
+            inference_chunk_size=2 if LOW_MEMORY_MODE else None,
         )
         self.model = DAiSEEPipeline(
             visual_encoder=encoder,
@@ -93,6 +107,18 @@ class MLatteService:
             self.model.load_state_dict(state["model_state"])
 
         self.model.eval()
+
+        if LOW_MEMORY_MODE and self.device.type == "cpu":
+            # Dynamic quantization (int8) of Linear layers only — safe for
+            # the VAE/Transformer/regression-head parts of the model
+            # (Conv2d layers in the ResNet branches aren't touched, since
+            # dynamic quantization doesn't meaningfully help convolutions).
+            self.model = torch.quantization.quantize_dynamic(
+                self.model, {torch.nn.Linear}, dtype=torch.qint8
+            )
+            print("[low-memory mode] Linear layers dynamically quantized to int8; "
+                  "CNN branches chunked 2 frames at a time.")
+
         self.clip_len = daisee_cfg["clip_seconds"]
         self.transform = default_face_transform(image_size=224, train=False)
 
@@ -126,7 +152,7 @@ class MLatteService:
         probs = [v / total for v in inv]
         confidence = probs[best_idx]
 
-        return {
+        result = {
             "engagement_score": score,
             "engagement_level": level,
             "confidence": confidence,
@@ -136,6 +162,10 @@ class MLatteService:
             "num_frames_used": clip.shape[1],
             "model_status": self.model_status,
         }
+        if LOW_MEMORY_MODE:
+            del clip, out, tensors
+            gc.collect()
+        return result
 
     def predict_from_video_bytes(self, video_bytes: bytes, target_fps: int = 1):
         import tempfile
@@ -170,11 +200,23 @@ class MLatteService:
         return self.predict_from_frames([frame] * self.clip_len)
 
 
-_service_singleton: MLatteService = None
+_service_singleton = None
 
 
-def get_service() -> MLatteService:
+def get_service():
+    """Returns the running inference service — either the full-PyTorch
+    MLatteService (default) or the leaner MLatteOnnxService, selected via
+    the MLATTE_USE_ONNX=1 environment variable. Only switch to ONNX after
+    you've run scripts/export_onnx.py + scripts/validate_onnx.py and
+    confirmed the export matches — see onnx_model_service.py."""
     global _service_singleton
     if _service_singleton is None:
-        _service_singleton = MLatteService()
+        if os.environ.get("MLATTE_USE_ONNX", "0") == "1":
+            try:
+                from .onnx_model_service import MLatteOnnxService
+            except ImportError:
+                from onnx_model_service import MLatteOnnxService
+            _service_singleton = MLatteOnnxService()
+        else:
+            _service_singleton = MLatteService()
     return _service_singleton

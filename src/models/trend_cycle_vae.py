@@ -118,8 +118,17 @@ class _SingleComponentVAE(nn.Module):
         logvar = self.to_logvar(pooled)
         return mu, logvar, enc_out
 
-    @staticmethod
-    def reparameterize(mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
+    def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
+        """Eq. (reparameterization trick). During training, samples from
+        N(mu, sigma^2) so gradients can flow through a stochastic latent
+        (standard VAE training). At inference (self.training == False),
+        this is deterministic and just returns `mu` — sampling noise into
+        a *deployed* prediction means the same clip could get a different
+        score on every request, which is undesirable (and also blocks a
+        clean ONNX export, since the graph would need a random-number op
+        with no meaningful "correct" output to validate against)."""
+        if not self.training:
+            return mu
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
         return mu + eps * std
@@ -142,10 +151,31 @@ class TrendCycleVAE(nn.Module):
                  num_layers: int = 4, latent_dim: int = 128,
                  conv_channels=(128, 256, 256),
                  fft_trend_cutoff_ratio: float = 0.1, fft_num_peaks: int = 3,
-                 dropout: float = 0.1):
+                 dropout: float = 0.1, onnx_safe: bool = False, seq_len: int = None):
+        """
+        onnx_safe: if True, replaces the torch.fft-based decomposition with
+            `MatmulFFTTrendCycleDecomposer` (precomputed DFT/IDFT matrices,
+            numerically identical for a FIXED sequence length). Required
+            for ONNX export; `seq_len` must then be given and match the
+            exact clip length used at inference (e.g. 10 for DAiSEE).
+            Leave False (default) for normal training/GPU use, where the
+            input length doesn't need to be fixed in advance.
+        seq_len: required when onnx_safe=True.
+        """
         super().__init__()
         self.fft_trend_cutoff_ratio = fft_trend_cutoff_ratio
         self.fft_num_peaks = fft_num_peaks
+        self.onnx_safe = onnx_safe
+
+        if onnx_safe:
+            if seq_len is None:
+                raise ValueError("onnx_safe=True requires a fixed seq_len (e.g. clip_len).")
+            from .fft_matrix import MatmulFFTTrendCycleDecomposer
+            self.decomposer = MatmulFFTTrendCycleDecomposer(
+                seq_len=seq_len, trend_cutoff_ratio=fft_trend_cutoff_ratio, num_peaks=fft_num_peaks
+            )
+        else:
+            self.decomposer = None
 
         self.trend_vae = _SingleComponentVAE(
             input_dim, d_model, n_heads, num_layers, latent_dim, conv_channels, dropout
@@ -161,10 +191,13 @@ class TrendCycleVAE(nn.Module):
         """
         F_fusion: (B, T, D) windowed fused multimodal features.
         """
-        trend, cycle = fft_trend_cycle_decompose(
-            F_fusion, trend_cutoff_ratio=self.fft_trend_cutoff_ratio,
-            num_peaks=self.fft_num_peaks,
-        )
+        if self.onnx_safe:
+            trend, cycle = self.decomposer(F_fusion)
+        else:
+            trend, cycle = fft_trend_cycle_decompose(
+                F_fusion, trend_cutoff_ratio=self.fft_trend_cutoff_ratio,
+                num_peaks=self.fft_num_peaks,
+            )
 
         recon_trend, mu_t, logvar_t, z_t = self.trend_vae(trend)
         recon_cycle, mu_c, logvar_c, z_c = self.cycle_vae(cycle)

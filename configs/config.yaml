@@ -59,7 +59,13 @@ train:
 
 # --- DAiSEE-specific (visual-only path, Section IV-C-2) ---
 daisee:
-  label_values: [0.0, 0.25, 0.5, 1.0]   # very-low..very-high mapped to continuous
+  label_values: [0.0, 0.5, 1.0]  # Low Engagement, Engaged, Highly Engaged
+  # DEVIATION: DAiSEE's "very-low" level has only ~33 training clips (~0.7%)
+  # — far too few to learn from. Following documented practice in the
+  # DAiSEE literature (e.g. Zheng et al. 2024, Educ. Sci.), we merge
+  # "very-low" and "low" into a single "Low Engagement" class (see
+  # src/data/daisee_dataset.py). This is a data-driven deviation from the
+  # paper's four-level mapping, not an arbitrary simplification.
   clip_seconds: 10
   batch_size: 16                # conservative start for 16GB GPUs; see note below
   lr: 1.0e-4

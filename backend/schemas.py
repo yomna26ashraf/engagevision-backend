@@ -5,9 +5,13 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
-# DAiSEE-aligned engagement levels (matches src/data/daisee_dataset.py mapping)
-LEVEL_LABELS = ["Not Engaged", "Barely Engaged", "Engaged", "Highly Engaged"]
-LEVEL_VALUES = [0.0, 0.25, 0.5, 1.0]
+# DAiSEE-aligned engagement levels (matches src/data/daisee_dataset.py).
+# NOTE: "very-low" and "low" are merged into a single "Low Engagement"
+# class — DAiSEE has only ~33 "very-low" training clips (~0.7%), too few
+# to learn from; this merge follows documented practice in the DAiSEE
+# literature (e.g. Zheng et al. 2024, Educ. Sci.).
+LEVEL_LABELS = ["Low Engagement", "Engaged", "Highly Engaged"]
+LEVEL_VALUES = [0.0, 0.5, 1.0]
 
 
 class LevelProbability(BaseModel):

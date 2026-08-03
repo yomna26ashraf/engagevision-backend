@@ -1,0 +1,45 @@
+# EngageVision AI backend — Hugging Face Spaces (Docker SDK) version.
+#
+# Differences from backend/Dockerfile (Render/Railway version):
+#   - Listens on port 7860 (HF Spaces' required default), not 8000.
+#   - Lives at the REPO ROOT (Spaces looks for ./Dockerfile by default),
+#     not inside backend/.
+#
+# Place this file at the root of your Space's git repo, alongside the
+# rest of this project's folders (src/, backend/, configs/, checkpoints/).
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# System deps needed by opencv-python
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install the ROOT project's requirements first (src/ deps: torch, torchvision,
+# transformers, opencv, etc.) then the backend-specific ones.
+COPY requirements.txt ./requirements.txt
+COPY backend/requirements.txt ./backend-requirements.txt
+
+# CPU-only torch build — much smaller image, and Spaces' free CPU tier has
+# no GPU anyway.
+RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu \
+    && pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir -r backend-requirements.txt
+
+# Copy the whole project (backend needs src/, configs/, and — importantly —
+# your trained checkpoints/ directory, or MLATTE_CHECKPOINT_URL set as a
+# Space secret to download it at startup instead).
+COPY . .
+
+# Hugging Face Spaces (Docker SDK) requires the app to listen on 7860 by
+# default, and runs the container as a non-root user — make /app writable
+# so the checkpoint auto-download (if used) and any cache dirs work.
+RUN chmod -R 777 /app
+ENV PORT=7860
+EXPOSE 7860
+
+WORKDIR /app/backend
+CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT}"]

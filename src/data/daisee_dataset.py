@@ -7,9 +7,17 @@ Expects:
   - Official label CSVs (`Labels/TrainLabels.csv` etc.) with columns:
     ClipID, Boredom, Engagement, Confusion, Frustration (each 0-3)
 
-Engagement labels (0,1,2,3 = very-low..very-high) are mapped to continuous
-values {0.0, 0.25, 0.5, 1.0} exactly as described in the paper's Data
-Processing subsection.
+DEVIATION FROM THE PAPER (documented, evidence-based): the paper maps all
+four raw Engagement codes (very-low, low, high, very-high) to four
+continuous values. In our DAiSEE split, "very-low" has only ~33 training
+clips (~0.7%) vs. ~2500 for "high" — far too few to learn from, and this
+matches a well-documented issue in the literature (e.g. Zheng et al. 2024,
+Dewan et al. 2018): several DAiSEE studies merge "very-low" and "low"
+into one "Low Engagement" class because (a) very-low is chronically
+under-represented, and (b) multiple papers report that human annotators
+themselves struggle to reliably distinguish very-low from low in 10s
+clips. We follow that same practice here, giving three continuous target
+levels: Low Engagement (0.0), Engaged (0.5), Highly Engaged (1.0).
 """
 from __future__ import annotations
 
@@ -22,7 +30,15 @@ from torch.utils.data import Dataset
 
 from .preprocessing import default_face_transform, load_frame_as_rgb, pad_or_truncate_frames
 
-DAISEE_ENGAGEMENT_MAP = {0: 0.0, 1: 0.25, 2: 0.5, 3: 1.0}
+# Raw DAiSEE Engagement code (0=very-low, 1=low, 2=high, 3=very-high) ->
+# continuous target. 0 and 1 are merged into a single "Low Engagement"
+# level (see module docstring).
+DAISEE_ENGAGEMENT_MAP = {0: 0.0, 1: 0.0, 2: 0.5, 3: 1.0}
+
+# Same merge, expressed as a 0..2 bucket index — used wherever we need an
+# integer class id (oversampling, class-weighting, confusion matrices).
+DAISEE_RAW_TO_MERGED_CLASS = {0: 0, 1: 0, 2: 1, 3: 2}
+MERGED_CLASS_LABELS = ["Low Engagement", "Engaged", "Highly Engaged"]
 
 
 class DAiSEEDataset(Dataset):
@@ -73,20 +89,49 @@ class DAiSEEDataset(Dataset):
         frames = torch.stack(frames, dim=0)  # (T, C, H, W)
         frames = pad_or_truncate_frames(frames, self.clip_len)
 
-        raw_label = int(row["Engagement"])
-        label = DAISEE_ENGAGEMENT_MAP[raw_label]
+        raw_label = DAISEE_RAW_TO_MERGED_CLASS[int(row["Engagement"])]  # 0=Low, 1=Engaged, 2=Highly
+        label = DAISEE_ENGAGEMENT_MAP[int(row["Engagement"])]
 
         return {
             "clip_id": clip_id,
             "frames": frames,                      # (clip_len, C, H, W)
             "label": torch.tensor(label, dtype=torch.float32),
-            "raw_label": raw_label,
+            "raw_label": raw_label,                 # merged 0..2 class index
         }
+
+
+def build_class_balanced_sampler(dataset, num_classes: int = 3):
+    """Builds a WeightedRandomSampler that oversamples the rarer merged
+    DAiSEE classes (see module docstring for the very-low/low merge).
+    Unlike loss-reweighting alone, this changes how often each sample is
+    actually *drawn* during training — rare-class clips get seen (and
+    backpropagated through, with fresh augmentation each time) far more
+    often per epoch, giving the model real training signal on them
+    instead of just a bigger loss penalty on rare misses.
+
+    Samples with replacement; epoch length stays equal to len(dataset), so
+    training time per epoch is unchanged — only the class composition of
+    each epoch shifts toward balance.
+    """
+    from torch.utils.data import WeightedRandomSampler
+
+    counts = torch.zeros(num_classes)
+    raw_labels = [DAISEE_RAW_TO_MERGED_CLASS[int(row["Engagement"])] for row in dataset.rows]
+    for label in raw_labels:
+        counts[label] += 1
+    counts = counts.clamp(min=1)
+    class_weight = 1.0 / counts  # higher weight = drawn more often
+    sample_weights = torch.tensor([class_weight[label] for label in raw_labels])
+
+    print(f"[oversampling] class counts: {counts.tolist()} "
+          f"-> per-draw class weight: {[round(w, 4) for w in class_weight.tolist()]}")
+
+    return WeightedRandomSampler(sample_weights, num_samples=len(dataset), replacement=True)
 
 
 def build_daisee_dataloaders(daisee_root: str, frames_root: str, batch_size: int = 32,
                               clip_len: int = 10, image_size: int = 224,
-                              num_workers: int = 4):
+                              num_workers: int = 4, balance_classes: bool = True):
     from torch.utils.data import DataLoader
 
     labels_dir = os.path.join(daisee_root, "Labels")
@@ -103,8 +148,13 @@ def build_daisee_dataloaders(daisee_root: str, frames_root: str, batch_size: int
         clip_len=clip_len, image_size=image_size, train=False,
     )
 
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
-                               num_workers=num_workers, pin_memory=True, drop_last=True)
+    if balance_classes:
+        sampler = build_class_balanced_sampler(train_ds)
+        train_loader = DataLoader(train_ds, batch_size=batch_size, sampler=sampler,
+                                   num_workers=num_workers, pin_memory=True, drop_last=True)
+    else:
+        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
+                                   num_workers=num_workers, pin_memory=True, drop_last=True)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False,
                              num_workers=num_workers, pin_memory=True)
     test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False,

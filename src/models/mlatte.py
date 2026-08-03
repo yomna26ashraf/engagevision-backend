@@ -11,12 +11,17 @@ Two variants, both sharing TrendCycleVAE:
   MLATTEVisualOnly   — visual modality only, ViCEF omitted (Section
                        IV-C-2, used for DAiSEE / EngageNet). We keep the
                        regression head (continuous score) as the primary
-                       output — matching the paper's stated data
-                       processing of mapping DAiSEE labels to {0, 0.25,
-                       0.5, 1.0} and training with MSE — and additionally
-                       expose `score_to_class()` to bucket predictions
-                       into the four DAiSEE levels for accuracy reporting
-                       (Table VI), since the paper reports both a
+                       output — following the paper's approach of mapping
+                       DAiSEE labels to continuous values and training
+                       with MSE. DEVIATION: our DAiSEE split has only ~33
+                       "very-low" training clips, far too few to learn
+                       from, so (following documented practice in the
+                       DAiSEE literature, e.g. Zheng et al. 2024) we merge
+                       "very-low" and "low" into a single "Low Engagement"
+                       class, giving three levels {0.0, 0.5, 1.0} instead
+                       of the paper's four. `score_to_class()` buckets
+                       predictions into these three levels for accuracy
+                       reporting, since the paper reports both a
                        regression-style training setup and a classification
                        accuracy number for this dataset.
 """
@@ -105,7 +110,7 @@ class MLATTEVisualOnly(nn.Module):
                  vae_d_model: int = 256, vae_heads: int = 8, vae_layers: int = 4,
                  vae_latent_dim: int = 128, vae_conv_channels=(128, 256, 256),
                  fft_trend_cutoff_ratio: float = 0.1, fft_num_peaks: int = 3,
-                 class_values=(0.0, 0.25, 0.5, 1.0)):
+                 class_values=(0.0, 0.5, 1.0), onnx_safe: bool = False, seq_len: int = None):
         super().__init__()
         self.visual_proj = nn.Linear(visual_dim, vae_d_model)
         self.trend_cycle_vae = TrendCycleVAE(
@@ -113,6 +118,7 @@ class MLATTEVisualOnly(nn.Module):
             num_layers=vae_layers, latent_dim=vae_latent_dim,
             conv_channels=vae_conv_channels,
             fft_trend_cutoff_ratio=fft_trend_cutoff_ratio, fft_num_peaks=fft_num_peaks,
+            onnx_safe=onnx_safe, seq_len=seq_len,
         )
         self.head = RegressionHead(
             vae_output_dim=self.trend_cycle_vae.output_dim,

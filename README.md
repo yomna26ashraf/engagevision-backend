@@ -161,5 +161,42 @@ tackling next:
 4. **Personalization** — add a learned per-student embedding, conditioning
    the regression head (Eq. 13) on it.
 
-Happy to help implement any of these once the reproduction baseline is in
-place and you know which gap matters most for your use case.
+## 8. Exporting to ONNX (for memory-constrained deployment)
+
+If your deployment host is too small for full PyTorch (e.g. a 512MB free
+tier), export the trained model to ONNX first:
+
+```bash
+# 1. Confirm the matmul-based FFT (needed for ONNX export) matches
+#    torch.fft exactly, before trusting anything built on it:
+pytest tests/test_onnx_fft_equivalence.py -v
+
+# 2. Export
+python scripts/export_onnx.py \
+    --checkpoint ./checkpoints/daisee_mlatte_best.pt \
+    --out ./checkpoints/daisee_mlatte.onnx
+
+# 3. Validate the export matches the original PyTorch model's predictions
+#    on real random inputs — do not skip this step:
+pip install onnxruntime
+python scripts/validate_onnx.py \
+    --checkpoint ./checkpoints/daisee_mlatte_best.pt \
+    --onnx ./checkpoints/daisee_mlatte.onnx
+```
+
+Then run the backend with `MLATTE_USE_ONNX=1` (see `backend/onnx_model_service.py`)
+to serve through `onnxruntime` instead of full PyTorch — a much smaller
+memory footprint for the model itself. Note: preprocessing still uses
+`torch`/`torchvision` under the hood (see that file's docstring for why),
+so this reduces but doesn't eliminate the PyTorch dependency.
+
+Two correctness notes baked into this export path:
+- The VAE's reparameterization trick now uses the **mean** (deterministic)
+  at inference instead of sampling — fixes a real bug where the same clip
+  could previously get a slightly different score on every request.
+- FFT is computed via precomputed DFT/IDFT matrices (`src/models/fft_matrix.py`)
+  instead of `torch.fft`, which has poor/no ONNX Runtime support for our
+  fixed, non-power-of-two clip length (10). This is mathematically exact
+  for a fixed sequence length, not an approximation — verified by
+  `tests/test_onnx_fft_equivalence.py`.
+

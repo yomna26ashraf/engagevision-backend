@@ -19,7 +19,7 @@ class DAiSEEPipeline(nn.Module):
                  vae_d_model: int = 256, vae_heads: int = 8, vae_layers: int = 4,
                  vae_latent_dim: int = 128, vae_conv_channels=(128, 256, 256),
                  fft_trend_cutoff_ratio: float = 0.1, fft_num_peaks: int = 3,
-                 class_values=(0.0, 0.25, 0.5, 1.0)):
+                 class_values=(0.0, 0.5, 1.0), onnx_safe: bool = False, seq_len: int = None):
         super().__init__()
         self.visual_encoder = visual_encoder
         self.mlatte = MLATTEVisualOnly(
@@ -27,7 +27,7 @@ class DAiSEEPipeline(nn.Module):
             vae_d_model=vae_d_model, vae_heads=vae_heads, vae_layers=vae_layers,
             vae_latent_dim=vae_latent_dim, vae_conv_channels=vae_conv_channels,
             fft_trend_cutoff_ratio=fft_trend_cutoff_ratio, fft_num_peaks=fft_num_peaks,
-            class_values=class_values,
+            class_values=class_values, onnx_safe=onnx_safe, seq_len=seq_len,
         )
 
     def forward(self, frames: torch.Tensor) -> Dict[str, torch.Tensor]:

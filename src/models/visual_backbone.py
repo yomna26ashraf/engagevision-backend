@@ -14,6 +14,8 @@ form F_V (4096-d), exactly as described in the paper.
 """
 from __future__ import annotations
 
+from typing import Optional
+
 import torch
 import torch.nn as nn
 import torchvision.models as tv_models
@@ -70,7 +72,7 @@ class DualBranchVisualEncoder(nn.Module):
 
     def __init__(self, emotion_branch: EmotionBranch, behavior_branch: BehaviorBranch,
                  freeze_backbones: bool = False, freeze_emotion: bool = None,
-                 freeze_behavior: bool = None):
+                 freeze_behavior: bool = None, inference_chunk_size: Optional[int] = None):
         """
         freeze_backbones: convenience flag applied to BOTH branches equally.
         freeze_emotion / freeze_behavior: per-branch overrides (e.g. freeze
@@ -78,11 +80,19 @@ class DualBranchVisualEncoder(nn.Module):
             ImageNet-only behavior branch trainable so it can still adapt
             during downstream training). If set, these take precedence
             over `freeze_backbones` for their respective branch.
+        inference_chunk_size: if set, frames are pushed through each CNN
+            branch in small groups (e.g. 2 at a time) instead of all at
+            once, trading a bit of speed for a much lower peak activation
+            memory footprint — useful on memory-constrained CPU hosts
+            (e.g. a 512MB deployment tier). Does not change the result,
+            only how much intermediate memory is held at once. Leave as
+            None during training (default) for full throughput.
         """
         super().__init__()
         self.emotion_branch = emotion_branch
         self.behavior_branch = behavior_branch
         self.output_dim = emotion_branch.feature_dim + behavior_branch.feature_dim  # 4096
+        self.inference_chunk_size = inference_chunk_size
 
         freeze_emotion = freeze_backbones if freeze_emotion is None else freeze_emotion
         freeze_behavior = freeze_backbones if freeze_behavior is None else freeze_behavior
@@ -100,11 +110,16 @@ class DualBranchVisualEncoder(nn.Module):
         """Runs a branch under no_grad() when it's frozen, so PyTorch never
         allocates activation memory for a backward pass that will never
         happen through this branch's own weights — a meaningful memory
-        saving on 16GB-class GPUs with dual ResNet-50 branches."""
-        if frozen:
-            with torch.no_grad():
+        saving on 16GB-class GPUs with dual ResNet-50 branches. Also
+        chunks the batch dimension when `self.inference_chunk_size` is set
+        (see __init__ docstring)."""
+        chunk = self.inference_chunk_size
+        ctx = torch.no_grad() if frozen else torch.enable_grad()
+        with ctx:
+            if chunk is None or x.shape[0] <= chunk:
                 return branch(x, return_features=True)
-        return branch(x, return_features=True)
+            outputs = [branch(x[i:i + chunk], return_features=True) for i in range(0, x.shape[0], chunk)]
+            return torch.cat(outputs, dim=0)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """

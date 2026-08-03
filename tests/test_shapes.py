@@ -73,7 +73,7 @@ def test_mlatte_visual_only_forward():
     classes = model.score_to_class(out["score"])
     assert classes.shape == (b,)
     for c in classes.tolist():
-        assert c in (0.0, 0.25, 0.5, 1.0)
+        assert c in (0.0, 0.5, 1.0)
 
 
 if __name__ == "__main__":
