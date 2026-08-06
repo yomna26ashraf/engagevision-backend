@@ -11,8 +11,9 @@ The frontend expects this at http://localhost:8000 by default (see
 src/lib/api.ts on the frontend side — VITE_API_BASE_URL overrides it).
 
 """
-from contextlib import asynccontextmanager
 from __future__ import annotations
+from contextlib import asynccontextmanager
+
 
 from collections import Counter
 from typing import Optional
