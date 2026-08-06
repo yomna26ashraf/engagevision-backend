@@ -52,7 +52,7 @@ app.add_middleware(
 )
 
 
-@app.get("/api/health")
+@app.api_route("/api/health", methods=["GET", "HEAD"])
 def health():
     service = get_service()
     return {"status": "ok", "model_status": service.model_status, "device": str(service.device)}
