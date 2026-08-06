@@ -23,7 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 try:
     from . import storage
-    from .model_service import get_service
+    from .service_factory import get_service
     from .schemas import (
         DashboardResponse, DistributionItem, EpochMetric, HistoryItem,
         LEVEL_LABELS, PerformanceResponse, PredictionResponse,
@@ -31,7 +31,7 @@ try:
 except ImportError:
     # Running as a top-level script (`uvicorn app:app` from inside backend/)
     import storage
-    from model_service import get_service
+    from .service_factory import get_service
     from schemas import (
         DashboardResponse, DistributionItem, EpochMetric, HistoryItem,
         LEVEL_LABELS, PerformanceResponse, PredictionResponse,

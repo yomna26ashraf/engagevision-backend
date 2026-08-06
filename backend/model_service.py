@@ -200,23 +200,7 @@ class MLatteService:
         return self.predict_from_frames([frame] * self.clip_len)
 
 
-_service_singleton = None
 
 
-def get_service():
-    """Returns the running inference service — either the full-PyTorch
-    MLatteService (default) or the leaner MLatteOnnxService, selected via
-    the MLATTE_USE_ONNX=1 environment variable. Only switch to ONNX after
-    you've run scripts/export_onnx.py + scripts/validate_onnx.py and
-    confirmed the export matches — see onnx_model_service.py."""
-    global _service_singleton
-    if _service_singleton is None:
-        if os.environ.get("MLATTE_USE_ONNX", "0") == "1":
-            try:
-                from .onnx_model_service import MLatteOnnxService
-            except ImportError:
-                from onnx_model_service import MLatteOnnxService
-            _service_singleton = MLatteOnnxService()
-        else:
-            _service_singleton = MLatteService()
-    return _service_singleton
+
+
