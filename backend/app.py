@@ -31,7 +31,7 @@ try:
 except ImportError:
     # Running as a top-level script (`uvicorn app:app` from inside backend/)
     import storage
-    from .service_factory import get_service
+    from service_factory import get_service
     from schemas import (
         DashboardResponse, DistributionItem, EpochMetric, HistoryItem,
         LEVEL_LABELS, PerformanceResponse, PredictionResponse,
