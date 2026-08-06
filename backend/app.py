@@ -9,7 +9,9 @@ Run locally:
 
 The frontend expects this at http://localhost:8000 by default (see
 src/lib/api.ts on the frontend side — VITE_API_BASE_URL overrides it).
+
 """
+from contextlib import asynccontextmanager
 from __future__ import annotations
 
 from collections import Counter
@@ -36,7 +38,19 @@ except ImportError:
 
 import os
 
-app = FastAPI(title="EngageVision AI API", version="0.1.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # يُنفذ هذا الجزء فور بدء تشغيل السيرفر وقبل استقبال أي طلبات
+    print("Loading model on startup...")
+    get_service()  # استدعاء دالة التحميل مسبقاً
+    print("Model loaded successfully!")
+    
+    yield  # يتوقف هنا أثناء عمل التطبيق
+    
+    # يمكن إضافه أي عملية تنظيف (Clean up) هنا عند إيقاف السيرفر إن وجدت
+
+# يمرر الـ lifespan للتطبيق عند إنشائه
+app = FastAPI(title="EngageVision AI API", version="0.1.0", lifespan=lifespan)
 
 # In dev this defaults to "*" (any origin). For a deployed portfolio demo,
 # set ALLOWED_ORIGINS to your frontend's exact URL(s), comma-separated,
